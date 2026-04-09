@@ -511,6 +511,47 @@ export default function ApiMonitorApp() {
     reader.readAsText(file);
   };
 
+  const generateTypescript = () => {
+    if (!latestResponse?.bodyRaw) return;
+    try {
+      const parsed = JSON.parse(latestResponse.bodyRaw);
+
+      const getType = (obj: any, indent = ""): string => {
+        if (obj === null) return "null";
+        if (Array.isArray(obj)) {
+          if (obj.length === 0) return "any[]";
+          const type = getType(obj[0], indent);
+          return type.includes("{") ? `Array<${type}>` : `${type}[]`;
+        }
+        if (typeof obj === "object") {
+          const props = Object.entries(obj)
+            .map(([k, v]) => {
+              const keyName = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(k)
+                ? k
+                : `"${k}"`;
+              return `${indent}  ${keyName}: ${getType(v, indent + "  ")};`;
+            })
+            .join("\n");
+          return `{\n${props}\n${indent}}`;
+        }
+        return typeof obj;
+      };
+
+      const tsType = getType(parsed);
+      const tsDef =
+        Array.isArray(parsed) || typeof parsed !== "object"
+          ? `export type APIResponse = ${tsType};`
+          : `export interface APIResponse ${tsType}`;
+
+      navigator.clipboard.writeText(tsDef);
+      setNotification("Copied TypeScript interface to clipboard!");
+    } catch {
+      setNotification(
+        "Could not parse response as JSON for TypeScript generation.",
+      );
+    }
+  };
+
   const metricCard = (title: string, value: string) => (
     <div className="rounded-lg border border-[#262626] bg-[#0a0a0a] p-4">
       <p className="text-[11px] font-semibold uppercase tracking-[0.05em] text-[#707070]">
@@ -1116,21 +1157,33 @@ ${headers
                     </div>
                   )}
                 </div>
-                <div className="flex-1 overflow-auto bg-[#0a0a0a] relative">
+                <div className="flex-1 overflow-auto bg-[#0a0a0a] relative group">
                   {!latestResponse ? (
                     <div className="flex h-full items-center justify-center text-[13px] text-[#666]">
                       Enter the URL and click send to get a response
                     </div>
                   ) : (
-                    <pre className="p-4 font-mono text-[13px] text-[#ddd]">
-                      {responseTab === "body"
-                        ? latestResponse.bodyPretty
-                        : responseTab === "headers"
-                          ? Object.entries(latestResponse.headers)
-                              .map(([k, v]) => `${k}: ${v}`)
-                              .join("\n")
-                          : latestResponse.bodyRaw}
-                    </pre>
+                    <>
+                      {responseTab === "body" &&
+                        (latestResponse.bodyRaw.trim().startsWith("{") ||
+                          latestResponse.bodyRaw.trim().startsWith("[")) && (
+                          <button
+                            onClick={generateTypescript}
+                            className="absolute right-4 top-4 z-10 rounded-md bg-[#262626] px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-[#ccc] opacity-0 transition-all hover:bg-[#333] hover:text-white group-hover:opacity-100 shadow-lg"
+                          >
+                            Copy as TS
+                          </button>
+                        )}
+                      <pre className="p-4 font-mono text-[13px] text-[#ddd]">
+                        {responseTab === "body"
+                          ? latestResponse.bodyPretty
+                          : responseTab === "headers"
+                            ? Object.entries(latestResponse.headers)
+                                .map(([k, v]) => `${k}: ${v}`)
+                                .join("\n")
+                            : latestResponse.bodyRaw}
+                      </pre>
+                    </>
                   )}
                 </div>
               </div>
