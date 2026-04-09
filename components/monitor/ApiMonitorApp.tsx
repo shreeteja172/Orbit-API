@@ -55,7 +55,7 @@ import {
   uid,
 } from "@/components/monitor/utils";
 
-type RequestTab = "params" | "headers" | "auth" | "body";
+type RequestTab = "params" | "headers" | "auth" | "body" | "snippets";
 type ResponseTab = "body" | "headers" | "raw";
 
 export default function ApiMonitorApp() {
@@ -326,17 +326,51 @@ export default function ApiMonitorApp() {
       setHistory((prev) => [item, ...prev]);
     } catch (error) {
       const err = error as AxiosError;
+
+      let errorDetail = err.message || "Unknown Error";
+      let errorName = err.name || "Request Failed";
+      let statusCode = 0;
+
+      if (err.response) {
+        // The request was made and the server responded with a status code
+        errorDetail = `Server Error: ${err.response.status} ${err.response.statusText}`;
+        statusCode = err.response.status;
+      } else if (err.request) {
+        // The request was made but no response was received (e.g., CORS, DNS, Timeout)
+        if (err.code === "ECONNABORTED") {
+          errorDetail = "Request Timeout. The server took too long to respond.";
+          errorName = "TimeoutError";
+        } else if (err.message === "Network Error") {
+          errorDetail =
+            "Network Error: This is likely a CORS issue, an invalid URL, or the server is completely down. Check the browser console for exact details.";
+          errorName = "NetworkError / CORS";
+        } else {
+          errorDetail = `No response received: ${err.message}`;
+        }
+      } else {
+        // Something happened in setting up the request
+        errorDetail = `Request Setup Error: ${err.message}`;
+      }
+
       setLatestResponse({
-        status: 0,
-        statusText: "Request Failed",
+        status: statusCode,
+        statusText: errorName,
         durationMs: 0,
         sizeBytes: 0,
         headers: {},
-        bodyPretty: err.message || "Network/CORS error",
-        bodyRaw: err.message || "Network/CORS error",
-        contentType: "text/plain",
+        bodyPretty: JSON.stringify(
+          {
+            error: errorName,
+            message: errorDetail,
+            code: err.code || "UNKNOWN",
+          },
+          null,
+          2,
+        ),
+        bodyRaw: errorDetail,
+        contentType: "application/json",
       });
-      setNotification("Request failed. Check URL, network, or CORS.");
+      setNotification(`Error: ${errorName} - ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -716,13 +750,52 @@ export default function ApiMonitorApp() {
       );
     }
 
-    return (
-      <textarea
-        value={body}
-        onChange={(e) => setBody(e.target.value)}
-        className="h-60 w-full rounded-md border border-[#1f1f1f] bg-[#0a0a0a] p-3 font-mono text-[13px] outline-none focus:border-[#555]"
-      />
-    );
+    if (requestTab === "snippets") {
+      const curlCommand = `curl -X ${method} "${resolvedUrl}" \\
+${headers
+  .filter((h) => h.enabled && h.key)
+  .map((h) => `  -H "${h.key}: ${h.value}"`)
+  .join(" \\\n")}${
+        body && method !== "GET"
+          ? ` \\\n  -d '${body.replace(/'/g, "'\\''")}'`
+          : ""
+      }`;
+
+      return (
+        <div className="space-y-4">
+          <div>
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.05em] text-[#888]">
+              cURL
+            </p>
+            <div className="relative">
+              <textarea
+                readOnly
+                value={curlCommand}
+                className="h-40 w-full rounded-md border border-[#1f1f1f] bg-[#0a0a0a] p-3 font-mono text-[13px] text-[#ccc] outline-none"
+              />
+              <button
+                onClick={() => navigator.clipboard.writeText(curlCommand)}
+                className="absolute right-2 top-2 rounded bg-[#262626] px-2 py-1 text-[11px] text-white hover:bg-[#333]"
+              >
+                Copy
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (requestTab === "body") {
+      return (
+        <textarea
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          className="h-60 w-full rounded-md border border-[#1f1f1f] bg-[#0a0a0a] p-3 font-mono text-[13px] outline-none focus:border-[#555]"
+        />
+      );
+    }
+
+    return null;
   };
 
   return (
@@ -983,17 +1056,17 @@ export default function ApiMonitorApp() {
               {/* Request Configuration */}
               <div className="flex flex-1 flex-col overflow-hidden border-b border-[#262626]">
                 <div className="flex items-center gap-6 px-4 pt-2 border-b border-[#262626] bg-[#141414]">
-                  {(["params", "headers", "auth", "body"] as RequestTab[]).map(
-                    (tab) => (
-                      <button
-                        key={tab}
-                        onClick={() => setRequestTab(tab)}
-                        className={`pb-2 pt-1 border-b-2 text-[13px] capitalize transition-colors ${requestTab === tab ? "border-blue-500 text-white" : "border-transparent text-[#888] hover:text-[#ccc]"}`}
-                      >
-                        {tab}
-                      </button>
-                    ),
-                  )}
+                  {(
+                    ["params", "headers", "auth", "body", "snippets"] as const
+                  ).map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => setRequestTab(tab as typeof requestTab)}
+                      className={`pb-2 pt-1 border-b-2 text-[13px] capitalize transition-colors ${requestTab === tab ? "border-blue-500 text-white" : "border-transparent text-[#888] hover:text-[#ccc]"}`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
                 </div>
                 <div className="flex-1 overflow-y-auto bg-[#0a0a0a] p-4">
                   {renderRequestTab()}
