@@ -14,6 +14,22 @@ export interface BasicAuth {
   password: string;
 }
 
+export type AssertionType = "statusCode" | "responseTime" | "bodyContains";
+
+export interface TestAssertion {
+  id: string;
+  type: AssertionType;
+  expectedValue: string;
+  enabled: boolean;
+}
+
+export interface AssertionResult {
+  assertionId: string;
+  passed: boolean;
+  actualValue: string;
+  message: string;
+}
+
 export interface AuthConfig {
   type: AuthType;
   bearerToken: string;
@@ -32,6 +48,7 @@ export interface ApiResponseData {
   bodyPretty: string;
   bodyRaw: string;
   contentType: string;
+  assertionResults?: AssertionResult[];
 }
 
 export interface ApiTestRecord {
@@ -46,6 +63,7 @@ export interface ApiTestRecord {
   headers: KVPair[];
   body: string;
   auth: AuthConfig;
+  assertions?: TestAssertion[];
   response?: ApiResponseData;
   thresholdBreached: boolean;
 }

@@ -37,12 +37,15 @@ import {
   ActiveTab,
   ApiResponseData,
   ApiTestRecord,
+  AssertionResult,
+  AssertionType,
   AuthConfig,
   AuthType,
   Collection,
   DashboardFilter,
   HttpMethod,
   KVPair,
+  TestAssertion,
   ThresholdMap,
 } from "@/components/monitor/types";
 import {
@@ -55,8 +58,8 @@ import {
   uid,
 } from "@/components/monitor/utils";
 
-type RequestTab = "params" | "headers" | "auth" | "body" | "snippets";
-type ResponseTab = "body" | "headers" | "raw";
+type RequestTab = "params" | "headers" | "auth" | "body" | "snippets" | "tests";
+type ResponseTab = "body" | "headers" | "raw" | "tests";
 
 export default function ApiMonitorApp() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("request");
@@ -70,6 +73,7 @@ export default function ApiMonitorApp() {
   const [queryParams, setQueryParams] = useState<KVPair[]>([makeKV()]);
   const [urlParams, setUrlParams] = useState<KVPair[]>([makeKV()]);
   const [body, setBody] = useState('{\n  "title": "foo"\n}');
+  const [assertions, setAssertions] = useState<TestAssertion[]>([]);
   const [auth, setAuth] = useState<AuthConfig>({
     type: "none",
     bearerToken: "",
@@ -290,6 +294,31 @@ export default function ApiMonitorApp() {
       const responseHeaders = Object.fromEntries(
         Object.entries(response.headers ?? {}).map(([k, v]) => [k, String(v)]),
       );
+
+      const assertionResults = assertions
+        .filter((a) => a.enabled)
+        .map((assertion): AssertionResult => {
+          let passed = false;
+          let actualValue = "";
+          let message = "";
+
+          if (assertion.type === "statusCode") {
+            actualValue = String(response.status);
+            passed = actualValue === assertion.expectedValue;
+            message = `Status code is ${actualValue}`;
+          } else if (assertion.type === "responseTime") {
+            actualValue = `${durationMs}ms`;
+            passed = durationMs <= Number(assertion.expectedValue);
+            message = `Response time is ${durationMs}ms`;
+          } else if (assertion.type === "bodyContains") {
+            actualValue = "Check Body";
+            passed = parsedResponse.raw.includes(assertion.expectedValue);
+            message = passed ? "Body contains string" : "Body missing string";
+          }
+
+          return { assertionId: assertion.id, passed, actualValue, message };
+        });
+
       const responseData: ApiResponseData = {
         status: response.status,
         statusText: response.statusText,
@@ -299,6 +328,7 @@ export default function ApiMonitorApp() {
         bodyPretty: parsedResponse.pretty,
         bodyRaw: parsedResponse.raw,
         contentType: responseHeaders["content-type"] ?? "unknown",
+        assertionResults,
       };
 
       const threshold = thresholds[url] ?? thresholds[resolvedUrl];
@@ -318,6 +348,7 @@ export default function ApiMonitorApp() {
         headers,
         body,
         auth: localAuth,
+        assertions,
         response: responseData,
         thresholdBreached,
       };
@@ -383,6 +414,9 @@ export default function ApiMonitorApp() {
     setQueryParams(record.queryParams.map((item) => ({ ...item, id: uid() })));
     setBody(record.body);
     setAuth(record.auth);
+    setAssertions(
+      record.assertions?.map((item) => ({ ...item, id: uid() })) || [],
+    );
     setSaveName(`${record.name} Copy`);
     setActiveTab("request");
   };
@@ -516,7 +550,7 @@ export default function ApiMonitorApp() {
     try {
       const parsed = JSON.parse(latestResponse.bodyRaw);
 
-      const getType = (obj: any, indent = ""): string => {
+      const getType = (obj: unknown, indent = ""): string => {
         if (obj === null) return "null";
         if (Array.isArray(obj)) {
           if (obj.length === 0) return "any[]";
@@ -524,7 +558,7 @@ export default function ApiMonitorApp() {
           return type.includes("{") ? `Array<${type}>` : `${type}[]`;
         }
         if (typeof obj === "object") {
-          const props = Object.entries(obj)
+          const props = Object.entries(obj as Record<string, unknown>)
             .map(([k, v]) => {
               const keyName = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(k)
                 ? k
@@ -787,6 +821,100 @@ export default function ApiMonitorApp() {
               />
             </>
           )}
+        </div>
+      );
+    }
+
+    if (requestTab === "tests") {
+      return (
+        <div className="space-y-4">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.05em] text-[#888]">
+            Test Assertions
+          </p>
+          {assertions.map((item) => (
+            <div
+              key={item.id}
+              className="grid grid-cols-[auto_1fr_1fr_auto] items-center gap-2 mb-2"
+            >
+              <input
+                type="checkbox"
+                checked={item.enabled}
+                onChange={(e) =>
+                  setAssertions((prev) =>
+                    prev.map((a) =>
+                      a.id === item.id
+                        ? { ...a, enabled: e.target.checked }
+                        : a,
+                    ),
+                  )
+                }
+                className="w-4 h-4"
+              />
+              <select
+                className="input"
+                value={item.type}
+                onChange={(e) =>
+                  setAssertions((prev) =>
+                    prev.map((a) =>
+                      a.id === item.id
+                        ? { ...a, type: e.target.value as AssertionType }
+                        : a,
+                    ),
+                  )
+                }
+              >
+                <option value="statusCode">Status Code Equals</option>
+                <option value="responseTime">
+                  Response Time Less Than (ms)
+                </option>
+                <option value="bodyContains">Body Contains String</option>
+              </select>
+              <input
+                className="input"
+                value={item.expectedValue}
+                placeholder={
+                  item.type === "statusCode"
+                    ? "200"
+                    : item.type === "responseTime"
+                      ? "300"
+                      : "error"
+                }
+                onChange={(e) =>
+                  setAssertions((prev) =>
+                    prev.map((a) =>
+                      a.id === item.id
+                        ? { ...a, expectedValue: e.target.value }
+                        : a,
+                    ),
+                  )
+                }
+              />
+              <button
+                className="icon-btn text-red-500 hover:text-red-400"
+                onClick={() =>
+                  setAssertions((prev) => prev.filter((a) => a.id !== item.id))
+                }
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+          <button
+            className="secondary-btn text-xs"
+            onClick={() =>
+              setAssertions((prev) => [
+                ...prev,
+                {
+                  id: uid(),
+                  type: "statusCode",
+                  expectedValue: "200",
+                  enabled: true,
+                },
+              ])
+            }
+          >
+            Add Test Assertion
+          </button>
         </div>
       );
     }
@@ -1098,7 +1226,14 @@ ${headers
               <div className="flex flex-1 flex-col overflow-hidden border-b border-[#262626]">
                 <div className="flex items-center gap-6 px-4 pt-2 border-b border-[#262626] bg-[#141414]">
                   {(
-                    ["params", "headers", "auth", "body", "snippets"] as const
+                    [
+                      "params",
+                      "headers",
+                      "auth",
+                      "body",
+                      "snippets",
+                      "tests",
+                    ] as const
                   ).map((tab) => (
                     <button
                       key={tab}
@@ -1118,14 +1253,28 @@ ${headers
               <div className="flex flex-1 flex-col overflow-hidden bg-[#141414]">
                 <div className="flex items-center justify-between border-b border-[#262626] px-4 pt-2">
                   <div className="flex items-center gap-6">
-                    {(["body", "headers", "raw"] as ResponseTab[]).map(
+                    {(["body", "headers", "raw", "tests"] as ResponseTab[]).map(
                       (tab) => (
                         <button
                           key={tab}
                           onClick={() => setResponseTab(tab)}
-                          className={`pb-2 pt-1 border-b-2 text-[13px] capitalize transition-colors ${responseTab === tab ? "border-blue-500 text-white" : "border-transparent text-[#888] hover:text-[#ccc]"}`}
+                          className={`pb-2 pt-1 border-b-2 text-[13px] capitalize transition-colors flex items-center gap-1 ${responseTab === tab ? "border-blue-500 text-white" : "border-transparent text-[#888] hover:text-[#ccc]"}`}
                         >
                           {tab}
+                          {tab === "tests" &&
+                            latestResponse?.assertionResults &&
+                            latestResponse.assertionResults.length > 0 && (
+                              <span
+                                className={`text-[10px] px-1.5 rounded-full ${latestResponse.assertionResults.every((a) => a.passed) ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}
+                              >
+                                {
+                                  latestResponse.assertionResults.filter(
+                                    (a) => a.passed,
+                                  ).length
+                                }
+                                /{latestResponse.assertionResults.length}
+                              </span>
+                            )}
                         </button>
                       ),
                     )}
@@ -1174,15 +1323,49 @@ ${headers
                             Copy as TS
                           </button>
                         )}
-                      <pre className="p-4 font-mono text-[13px] text-[#ddd]">
-                        {responseTab === "body"
-                          ? latestResponse.bodyPretty
-                          : responseTab === "headers"
-                            ? Object.entries(latestResponse.headers)
-                                .map(([k, v]) => `${k}: ${v}`)
-                                .join("\n")
-                            : latestResponse.bodyRaw}
-                      </pre>
+                      {responseTab === "tests" ? (
+                        <div className="p-4 space-y-4">
+                          {!latestResponse.assertionResults ||
+                          latestResponse.assertionResults.length === 0 ? (
+                            <p className="text-[#888] text-[13px]">
+                              No assertions configured for this request. Add
+                              some from the Request &gt; Tests tab.
+                            </p>
+                          ) : (
+                            latestResponse.assertionResults.map((result) => (
+                              <div
+                                key={result.assertionId}
+                                className={`p-4 rounded-md border ${result.passed ? "bg-green-500/10 border-green-500/20" : "bg-red-500/10 border-red-500/20"}`}
+                              >
+                                <div className="flex items-center gap-2 mb-2">
+                                  {result.passed ? (
+                                    <span className="text-green-500">
+                                      ✓ Passed
+                                    </span>
+                                  ) : (
+                                    <span className="text-red-500">
+                                      ✗ Failed
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[#ccc] text-[13px]">
+                                  {result.message}
+                                </p>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      ) : (
+                        <pre className="p-4 font-mono text-[13px] text-[#ddd]">
+                          {responseTab === "body"
+                            ? latestResponse.bodyPretty
+                            : responseTab === "headers"
+                              ? Object.entries(latestResponse.headers)
+                                  .map(([k, v]) => `${k}: ${v}`)
+                                  .join("\n")
+                              : latestResponse.bodyRaw}
+                        </pre>
+                      )}
                     </>
                   )}
                 </div>
